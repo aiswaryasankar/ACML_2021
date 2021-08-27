@@ -28,12 +28,13 @@ import nltk  # Here to have a nice missing dependency error message early on
 import numpy as np
 from datasets import load_dataset, load_metric
 
-import transformers
+from . import transformers
 from filelock import FileLock
 from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
     AutoTokenizer,
+    XLNetTokenizer
     DataCollatorForSeq2Seq,
     HfArgumentParser,
     Seq2SeqTrainer,
@@ -235,6 +236,7 @@ summarization_name_mapping = {
     "xglue": ("news_body", "news_title"),
     "xsum": ("document", "summary"),
     "wiki_summary": ("article", "highlights"),
+    "multi_news": ("document", "summary"),
 }
 
 
@@ -344,6 +346,18 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
+
+    # XLNetTokenizer.from_pretrained('xlnet-base-cased', do_lower_case=True)
+
+    tokenizer_xlnet = XLNetTokenizer.from_pretrained('xlnet-base-cased', do_lower_case=True)
+
+    #     model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
+    #     cache_dir=model_args.cache_dir,
+    #     use_fast=model_args.use_fast_tokenizer,
+    #     revision=model_args.model_revision,
+    #     use_auth_token=True if model_args.use_auth_token else None,
+    # )
+
     model = AutoModelForSeq2SeqLM.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -421,19 +435,50 @@ def main():
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
 
+
+    def preprocess_function_xlnet(examples):
+        inputs = examples[text_column]
+        targets = examples[summary_column]
+        inputs = [prefix + inp for inp in inputs]
+        model_inputs = tokenizer_xlnet(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+
+        # Setup the tokenizer for targets
+        with tokenizer_xlnet.as_target_tokenizer():
+            labels = tokenizer_xlnet(targets, max_length=max_target_length, padding=padding, truncation=True)
+
+        # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
+        # padding in the loss.
+        if padding == "max_length" and data_args.ignore_pad_token_for_loss:
+            labels["input_ids"] = [
+                [(l if l != tokenizer_xlnet.pad_token_id else -100) for l in label] for label in labels["input_ids"]
+            ]
+
+        model_inputs["labels"] = labels["input_ids"]
+        return model_inputs
+
     if training_args.do_train:
+        print("DO TRAINNNNN")
         if "train" not in datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = datasets["train"]
         if data_args.max_train_samples is not None:
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
-        train_dataset = train_dataset.map(
-            preprocess_function,
-            batched=True,
-            num_proc=data_args.preprocessing_num_workers,
-            remove_columns=column_names,
-            load_from_cache_file=not data_args.overwrite_cache,
-        )
+        # train_dataset = train_dataset.map(
+        #     preprocess_function,
+        #     batched=True,
+        #     num_proc=data_args.preprocessing_num_workers,
+        #     remove_columns=column_names,
+        #     load_from_cache_file=not data_args.overwrite_cache,
+        # )
+        # train_dataset_xlnet = train_dataset.map(
+        #     preprocess_function_xlnet,
+        #     batched=True,
+        #     num_proc=data_args.preprocessing_num_workers,
+        #     remove_columns=column_names,
+        #     load_from_cache_file=not data_args.overwrite_cache,
+        # )
+        print("training dataset without pre-processing")
+        print(train_dataset)
 
     if training_args.do_eval:
         max_target_length = data_args.val_max_target_length
@@ -515,7 +560,8 @@ def main():
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
-        tokenizer=tokenizer,
+        tokenizer_xlnet=tokenizer,
+        tokenizer_t5=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics if training_args.predict_with_generate else None,
     )

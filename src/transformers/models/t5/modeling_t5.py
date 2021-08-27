@@ -1431,9 +1431,15 @@ class T5ForConditionalGeneration(T5PreTrainedModel):
 
     def __init__(self, config):
         super().__init__(config)
+
+
+        print("INITIALIZING T-5 for CONDITIONAL GENERATION MODEL")
         self.model_dim = config.d_model
 
         self.shared = nn.Embedding(config.vocab_size, config.d_model)
+
+        print("VOCAB SIZE IS ")
+        print(config.vocab_size)
 
         encoder_config = copy.deepcopy(config)
         encoder_config.is_decoder = False
@@ -1616,8 +1622,10 @@ class T5ForConditionalGeneration(T5PreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-
         sequence_output = decoder_outputs[0]
+
+        # print("SEQUENCE OUTPUT")
+        # print(sequence_output.shape)
 
         # Set device for model parallelism
         if self.model_parallel:
@@ -1631,6 +1639,10 @@ class T5ForConditionalGeneration(T5PreTrainedModel):
             sequence_output = sequence_output * (self.model_dim ** -0.5)
 
         lm_logits = self.lm_head(sequence_output)
+        # print("LANGUAGE MODEL LOGITS")
+        # print(lm_logits.shape)
+        # print(lm_logits)
+
 
         loss = None
         if labels is not None:

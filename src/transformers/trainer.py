@@ -267,9 +267,11 @@ class Trainer:
         model: Union[PreTrainedModel, nn.Module] = None,
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
-        train_dataset: Optional[Dataset] = None,
+        train_dataset_t5: Optional[Dataset] = None,
+        train_dataset_xlnet: Optional[Dataset] = None,
         eval_dataset: Optional[Dataset] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        tokenizer_xlnet: Optional[PreTrainedTokenizerBase] = None,
+        tokenizer_t5: Optional[PreTrainedTokenizerBase] = None,
         model_init: Callable[[], PreTrainedModel] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -353,11 +355,13 @@ class Trainer:
         ):
             self.place_model_on_device = False
 
-        default_collator = default_data_collator if tokenizer is None else DataCollatorWithPadding(tokenizer)
+        default_collator = default_data_collator if tokenizer_t5 is None else DataCollatorWithPadding(tokenizer_t5)
         self.data_collator = data_collator if data_collator is not None else default_collator
-        self.train_dataset = train_dataset
+        self.train_dataset_t5 = train_dataset_t5
+        self.train_dataset_xlnet = train_dataset_xlnet
         self.eval_dataset = eval_dataset
-        self.tokenizer = tokenizer
+        self.tokenizer_t5 = tokenizer_t5
+        self.tokenizer_xlnet = tokenizer_xlnet
 
         if self.place_model_on_device:
             model = model.to(args.device)
@@ -380,7 +384,7 @@ class Trainer:
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
         self.callback_handler = CallbackHandler(
-            callbacks, self.model, self.tokenizer, self.optimizer, self.lr_scheduler
+            callbacks, self.model, self.tokenizer_t5, self.optimizer, self.lr_scheduler
         )
         self.add_callback(PrinterCallback if self.args.disable_tqdm else DEFAULT_PROGRESS_CALLBACK)
 
@@ -396,7 +400,7 @@ class Trainer:
         if args.max_steps > 0:
             logger.info("max_steps is given, it will override any value given in num_train_epochs")
 
-        if train_dataset is not None and not isinstance(train_dataset, collections.abc.Sized) and args.max_steps <= 0:
+        if train_dataset_t5 is not None and not isinstance(train_dataset_t5, collections.abc.Sized) and args.max_steps <= 0:
             raise ValueError("train_dataset does not implement __len__, max_steps has to be specified")
 
         self._signature_columns = None
@@ -525,7 +529,7 @@ class Trainer:
             return dataset.remove_columns(ignored_columns)
 
     def _get_train_sampler(self) -> Optional[torch.utils.data.sampler.Sampler]:
-        if not isinstance(self.train_dataset, collections.abc.Sized):
+        if not isinstance(self.train_dataset_t5, collections.abc.Sized):
             return None
 
         generator = None
@@ -535,18 +539,18 @@ class Trainer:
 
         # Build the sampler.
         if self.args.group_by_length:
-            if is_datasets_available() and isinstance(self.train_dataset, datasets.Dataset):
+            if is_datasets_available() and isinstance(self.train_dataset_t5, datasets.Dataset):
                 lengths = (
-                    self.train_dataset[self.args.length_column_name]
-                    if self.args.length_column_name in self.train_dataset.column_names
+                    self.train_dataset_t5[self.args.length_column_name]
+                    if self.args.length_column_name in self.train_dataset_t5.column_names
                     else None
                 )
             else:
                 lengths = None
-            model_input_name = self.tokenizer.model_input_names[0] if self.tokenizer is not None else None
+            model_input_name = self.tokenizer_t5.model_input_names[0] if self.tokenizer_t5 is not None else None
             if self.args.world_size <= 1:
                 return LengthGroupedSampler(
-                    self.train_dataset,
+                    self.train_dataset_t5,
                     self.args.train_batch_size,
                     lengths=lengths,
                     model_input_name=model_input_name,
@@ -554,7 +558,7 @@ class Trainer:
                 )
             else:
                 return DistributedLengthGroupedSampler(
-                    self.train_dataset,
+                    self.train_dataset_t5,
                     self.args.train_batch_size,
                     num_replicas=self.args.world_size,
                     rank=self.args.process_index,
@@ -566,15 +570,15 @@ class Trainer:
         else:
             if self.args.world_size <= 1:
                 if _is_torch_generator_available:
-                    return RandomSampler(self.train_dataset, generator=generator)
-                return RandomSampler(self.train_dataset)
+                    return RandomSampler(self.train_dataset_t5, generator=generator)
+                return RandomSampler(self.train_dataset_t5)
             elif (
                 self.args.parallel_mode in [ParallelMode.TPU, ParallelMode.SAGEMAKER_MODEL_PARALLEL]
                 and not self.args.dataloader_drop_last
             ):
                 # Use a loop for TPUs when drop_last is False to have all batches have the same size.
                 return DistributedSamplerWithLoop(
-                    self.train_dataset,
+                    self.train_dataset_t5,
                     batch_size=self.args.per_device_train_batch_size,
                     num_replicas=self.args.world_size,
                     rank=self.args.process_index,
@@ -582,13 +586,13 @@ class Trainer:
                 )
             else:
                 return DistributedSampler(
-                    self.train_dataset,
+                    self.train_dataset_t5,
                     num_replicas=self.args.world_size,
                     rank=self.args.process_index,
                     seed=self.args.seed,
                 )
 
-    def get_train_dataloader(self) -> DataLoader:
+    def get_train_dataloader(self, train_dataset) -> DataLoader:
         """
         Returns the training :class:`~torch.utils.data.DataLoader`.
 
@@ -597,10 +601,9 @@ class Trainer:
 
         Subclass and override this method if you want to inject some custom behavior.
         """
-        if self.train_dataset is None:
+        if train_dataset is None:
             raise ValueError("Trainer: training requires a train_dataset.")
 
-        train_dataset = self.train_dataset
         if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
             train_dataset = self._remove_unused_columns(train_dataset, description="training")
 
@@ -979,6 +982,49 @@ class Trainer:
 
         return model
 
+
+    # def preprocess_function_t5(self, examples):
+    #     inputs = examples[text_column]
+    #     targets = examples[summary_column]
+    #     inputs = [prefix + inp for inp in inputs]
+    #     model_inputs = self.tokenizer_t5(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+
+    #     # Setup the tokenizer for targets
+    #     with self.tokenizer_t5.as_target_tokenizer():
+    #         labels = self.tokenizer_t5(targets, max_length=max_target_length, padding=padding, truncation=True)
+
+    #     # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
+    #     # padding in the loss.
+    #     if padding == "max_length" and data_args.ignore_pad_token_for_loss:
+    #         labels["input_ids"] = [
+    #             [(l if l != self.tokenizer_t5.pad_token_id else -100) for l in label] for label in labels["input_ids"]
+    #         ]
+
+    #     model_inputs["labels"] = labels["input_ids"]
+    #     return model_inputs
+
+
+    # def preprocess_function_xlnet(self, examples):
+    #     inputs = examples[text_column]
+    #     targets = examples[summary_column]
+    #     inputs = [prefix + inp for inp in inputs]
+    #     model_inputs = self.tokenizer_xlnet(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+
+    #     # Setup the tokenizer for targets
+    #     with self.tokenizer_xlnet.as_target_tokenizer():
+    #         labels = self.tokenizer_xlnet(targets, max_length=max_target_length, padding=padding, truncation=True)
+
+    #     # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
+    #     # padding in the loss.
+    #     if padding == "max_length" and data_args.ignore_pad_token_for_loss:
+    #         labels["input_ids"] = [
+    #             [(l if l != self.tokenizer_xlnet.pad_token_id else -100) for l in label] for label in labels["input_ids"]
+    #         ]
+
+    #     model_inputs["labels"] = labels["input_ids"]
+    #     return model_inputs
+
+
     def train(
         self,
         resume_from_checkpoint: Optional[Union[str, bool]] = None,
@@ -1000,6 +1046,7 @@ class Trainer:
                 Additional keyword arguments used to hide deprecated arguments
         """
 
+        print("CALLING TRAIN")
         # memory metrics - must set up as early as possible
         self._memory_tracker.start()
 
@@ -1075,7 +1122,11 @@ class Trainer:
         train_dataset_is_sized = isinstance(self.train_dataset, collections.abc.Sized)
 
         # Data loader and number of training steps
-        train_dataloader = self.get_train_dataloader()
+        print("Getting the train dataloader")
+        train_dataloader_t5 = self.get_train_dataloader(self.train_dataset_t5)
+        train_dataloader_xlnet = self.get_train_dataloader(self.train_dataset_xlnet)
+
+        print(next(iter(train_dataloader_t5)))
 
         # Setting up training control variables:
         # number of training epochs: num_train_epochs
@@ -1083,7 +1134,7 @@ class Trainer:
         # total number of training steps to execute: max_steps
         total_train_batch_size = args.train_batch_size * args.gradient_accumulation_steps * args.world_size
         if train_dataset_is_sized:
-            num_update_steps_per_epoch = len(train_dataloader) // args.gradient_accumulation_steps
+            num_update_steps_per_epoch = len(train_dataloader_t5) // args.gradient_accumulation_steps
             num_update_steps_per_epoch = max(num_update_steps_per_epoch, 1)
             if args.max_steps > 0:
                 max_steps = args.max_steps
@@ -1141,7 +1192,7 @@ class Trainer:
 
         # Train!
         num_examples = (
-            self.num_examples(train_dataloader) if train_dataset_is_sized else total_train_batch_size * args.max_steps
+            self.num_examples(train_dataloader_t5) if train_dataset_is_sized else total_train_batch_size * args.max_steps
         )
 
         logger.info("***** Running training *****")
@@ -1187,7 +1238,7 @@ class Trainer:
         self.callback_handler.model = self.model
         self.callback_handler.optimizer = self.optimizer
         self.callback_handler.lr_scheduler = self.lr_scheduler
-        self.callback_handler.train_dataloader = train_dataloader
+        self.callback_handler.train_dataloader = train_dataloader_t5
         self.state.trial_name = self.hp_name(trial) if self.hp_name is not None else None
         self.state.trial_params = hp_params(trial) if trial is not None else None
         # This should be the same if the state has been saved but in case the training arguments changed, it's safer
@@ -1210,7 +1261,7 @@ class Trainer:
         if not args.ignore_data_skip:
             for epoch in range(epochs_trained):
                 # We just need to begin an iteration to create the randomization of the sampler.
-                for _ in train_dataloader:
+                for _ in train_dataloader_t5:
                     break
 
         for epoch in range(epochs_trained, num_train_epochs):
@@ -1220,10 +1271,14 @@ class Trainer:
                 train_dataloader.dataset.set_epoch(epoch)
 
             if is_torch_tpu_available():
-                parallel_loader = pl.ParallelLoader(train_dataloader, [args.device]).per_device_loader(args.device)
-                epoch_iterator = parallel_loader
+                parallel_loader = pl.ParallelLoader(train_dataloader_t5, [args.device]).per_device_loader(args.device)
+                epoch_iterator_t5 = parallel_loader
+
+                parallel_loader_xlnet = pl.ParallelLoader(train_dataloader_xlnet, [args.device]).per_device_loader(args.device)
+                epoch_iterator_xlnet = parallel_loader_xlnet
             else:
-                epoch_iterator = train_dataloader
+                epoch_iterator_t5 = train_dataloader_t5
+                epoch_iterator_xlnet = train_dataloader_xlnet
 
             # Reset the past mems state at the beginning of each epoch if necessary.
             if args.past_index >= 0:
@@ -1234,7 +1289,12 @@ class Trainer:
             )
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
 
-            for step, inputs in enumerate(epoch_iterator):
+            print("Epoch_iterator")
+            print(epoch_iterator)
+            for step_t5, inputs_t5, step_xlnet, inputs_xlnet in zip(epoch_iterator_t5, epoch_iterator_xlnet):
+
+                print("NOT PROCESSED INPUTS")
+                print(inputs)
 
                 # Skip past any already trained steps if resuming training
                 if steps_trained_in_current_epoch > 0:
@@ -1778,6 +1838,17 @@ class Trainer:
         else:
             labels = None
         outputs = model(**inputs)
+
+        # print("Model is ")
+        # print(model)
+        print("Model inputs are ")
+        print(inputs)
+        print("Model outputs are ")
+        print(outputs.logits)
+
+        ## Essentially right here, right before computing the loss you want to combine the logits of the t5 polarization model with the logits generated by this training step above
+        # Model inputs are pretty much results of the tokenizer - input_ids, labels, attention_mask, decoder_input_ids which would be the same inputs into the t5 evaluate polarity call
+
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
@@ -2176,7 +2247,17 @@ class Trainer:
                 observed_num_examples += observed_batch_size
 
             # Prediction step
+            # Print out the inputs at each step so you can see if you can do a cur_len, max_len system
+            print("THE INPUT INTO PREDICTION")
+            print(inputs)
             loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+
+            print("THE OUTPUT LOGITS")
+            print(logits)
+            print("THE LABELS")
+            print(labels)
+            print("THE LOSS")
+            print(loss)
 
             # Update containers on host
             if loss is not None:
@@ -2405,6 +2486,12 @@ class Trainer:
         logits = nested_detach(logits)
         if len(logits) == 1:
             logits = logits[0]
+
+        ## Essentially perform the FUDGE algorithm here
+        ## You can go ahead and get the top k predictions scores easily
+        ## Where do you get the previous input ids from?
+
+
 
         return (loss, logits, labels)
 

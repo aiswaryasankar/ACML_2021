@@ -1,0 +1,39 @@
+{
+    "os": "macOS-10.16-x86_64-i386-64bit",
+    "python": "3.8.5",
+    "heartbeatAt": "2021-08-27T18:34:02.088316",
+    "startedAt": "2021-08-27T18:33:57.583055",
+    "docker": null,
+    "cpu_count": 12,
+    "cuda": null,
+    "args": [
+        "--model_name_or_path",
+        "t5-small",
+        "--do_train",
+        "--do_eval",
+        "--dataset_name",
+        "multi_news",
+        "--source_prefix",
+        "summarize: ",
+        "--output_dir",
+        "/tmp/tst-summarization",
+        "--per_device_train_batch_size=4",
+        "--per_device_eval_batch_size=4",
+        "--overwrite_output_dir",
+        "--predict_with_generate",
+        "--report_to",
+        "wandb"
+    ],
+    "state": "running",
+    "program": "run_summarization.py",
+    "codePath": "src/run_summarization.py",
+    "git": {
+        "remote": "https://github.com/huggingface/transformers.git",
+        "commit": "b56848c8c8d29822cb970abd56bc620cece937a3"
+    },
+    "email": "aiswarya.s@uber.com",
+    "root": "/Users/aiswarya.s/Desktop/transformers_fudge",
+    "host": "aiswarya-s-C02DVCPWMD6M",
+    "username": "aiswarya.s",
+    "executable": "/Users/aiswarya.s/opt/anaconda3/bin/python"
+}
