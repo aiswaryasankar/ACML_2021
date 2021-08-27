@@ -313,6 +313,7 @@ def main():
     if data_args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         datasets = load_dataset(data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir)
+
     else:
         data_files = {}
         if data_args.train_file is not None:
@@ -460,6 +461,7 @@ def main():
         if "train" not in datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = datasets["train"]
+
         if data_args.max_train_samples is not None:
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
 

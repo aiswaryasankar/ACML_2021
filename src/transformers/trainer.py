@@ -1119,7 +1119,7 @@ class Trainer:
             self.model_wrapped = self.model
 
         # Keeping track whether we can can len() on the dataset or not
-        train_dataset_is_sized = isinstance(self.train_dataset, collections.abc.Sized)
+        train_dataset_is_sized = isinstance(self.train_dataset_t5, collections.abc.Sized)
 
         # Data loader and number of training steps
         print("Getting the train dataloader")
@@ -1147,7 +1147,7 @@ class Trainer:
             else:
                 max_steps = math.ceil(args.num_train_epochs * num_update_steps_per_epoch)
                 num_train_epochs = math.ceil(args.num_train_epochs)
-                num_train_samples = len(self.train_dataset) * args.num_train_epochs
+                num_train_samples = len(self.train_dataset_t5) * args.num_train_epochs
         else:
             # see __init__. max_steps is set when the dataset has no __len__
             max_steps = args.max_steps
