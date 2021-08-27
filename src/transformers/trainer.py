@@ -604,8 +604,9 @@ class Trainer:
         if train_dataset is None:
             raise ValueError("Trainer: training requires a train_dataset.")
 
-        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
-            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+        # This prevents the xl_net token_type_ids from being used
+        #if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
+        #    train_dataset = self._remove_unused_columns(train_dataset, description="training")
 
         if isinstance(train_dataset, torch.utils.data.dataset.IterableDataset):
             if self.args.world_size > 1:
@@ -983,48 +984,6 @@ class Trainer:
         return model
 
 
-    # def preprocess_function_t5(self, examples):
-    #     inputs = examples[text_column]
-    #     targets = examples[summary_column]
-    #     inputs = [prefix + inp for inp in inputs]
-    #     model_inputs = self.tokenizer_t5(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
-
-    #     # Setup the tokenizer for targets
-    #     with self.tokenizer_t5.as_target_tokenizer():
-    #         labels = self.tokenizer_t5(targets, max_length=max_target_length, padding=padding, truncation=True)
-
-    #     # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
-    #     # padding in the loss.
-    #     if padding == "max_length" and data_args.ignore_pad_token_for_loss:
-    #         labels["input_ids"] = [
-    #             [(l if l != self.tokenizer_t5.pad_token_id else -100) for l in label] for label in labels["input_ids"]
-    #         ]
-
-    #     model_inputs["labels"] = labels["input_ids"]
-    #     return model_inputs
-
-
-    # def preprocess_function_xlnet(self, examples):
-    #     inputs = examples[text_column]
-    #     targets = examples[summary_column]
-    #     inputs = [prefix + inp for inp in inputs]
-    #     model_inputs = self.tokenizer_xlnet(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
-
-    #     # Setup the tokenizer for targets
-    #     with self.tokenizer_xlnet.as_target_tokenizer():
-    #         labels = self.tokenizer_xlnet(targets, max_length=max_target_length, padding=padding, truncation=True)
-
-    #     # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
-    #     # padding in the loss.
-    #     if padding == "max_length" and data_args.ignore_pad_token_for_loss:
-    #         labels["input_ids"] = [
-    #             [(l if l != self.tokenizer_xlnet.pad_token_id else -100) for l in label] for label in labels["input_ids"]
-    #         ]
-
-    #     model_inputs["labels"] = labels["input_ids"]
-    #     return model_inputs
-
-
     def train(
         self,
         resume_from_checkpoint: Optional[Union[str, bool]] = None,
@@ -1123,6 +1082,8 @@ class Trainer:
 
         # Data loader and number of training steps
         print("Getting the train dataloader")
+        print("train_dataset_xlnet still has the right keys?")
+        print(self.train_dataset_xlnet)
         train_dataloader_t5 = self.get_train_dataloader(self.train_dataset_t5)
         train_dataloader_xlnet = self.get_train_dataloader(self.train_dataset_xlnet)
 
@@ -1265,11 +1226,13 @@ class Trainer:
                     break
 
         for epoch in range(epochs_trained, num_train_epochs):
-            if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
-                train_dataloader.sampler.set_epoch(epoch)
-            elif isinstance(train_dataloader.dataset, IterableDatasetShard):
-                train_dataloader.dataset.set_epoch(epoch)
+            if isinstance(train_dataloader_t5, DataLoader) and isinstance(train_dataloader_t5.sampler, DistributedSampler):
+                train_dataloader_t5.sampler.set_epoch(epoch)
+            elif isinstance(train_dataloader_t5.dataset, IterableDatasetShard):
+                train_dataloader_t5.dataset.set_epoch(epoch)
 
+
+            print(train_dataloader_xlnet)
             if is_torch_tpu_available():
                 parallel_loader = pl.ParallelLoader(train_dataloader_t5, [args.device]).per_device_loader(args.device)
                 epoch_iterator_t5 = parallel_loader
@@ -1285,16 +1248,22 @@ class Trainer:
                 self._past = None
 
             steps_in_epoch = (
-                len(epoch_iterator) if train_dataset_is_sized else args.max_steps * args.gradient_accumulation_steps
+                len(epoch_iterator_t5) if train_dataset_is_sized else args.max_steps * args.gradient_accumulation_steps
             )
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
 
             print("Epoch_iterator")
-            print(epoch_iterator)
-            for step_t5, inputs_t5, step_xlnet, inputs_xlnet in zip(epoch_iterator_t5, epoch_iterator_xlnet):
+            print(epoch_iterator_t5)
+            step_t5, step_xlnet = 0, 0
+            for inputs_t5, inputs_xlnet in zip(epoch_iterator_t5, epoch_iterator_xlnet):
 
-                print("NOT PROCESSED INPUTS")
-                print(inputs)
+                print("step_t5, inputs_t5")
+                print(step_t5)
+                print(inputs_t5.keys)
+
+                print("step_xlnet, inputs_xlnet")
+                print(step_xlnet)
+                print(inputs_xlnet.keys)
 
                 # Skip past any already trained steps if resuming training
                 if steps_trained_in_current_epoch > 0:
@@ -1308,29 +1277,29 @@ class Trainer:
                     steps_trained_progress_bar.close()
                     steps_trained_progress_bar = None
 
-                if step % args.gradient_accumulation_steps == 0:
+                if step_t5 % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
 
                 if (
-                    ((step + 1) % args.gradient_accumulation_steps != 0)
+                    ((step_t5 + 1) % args.gradient_accumulation_steps != 0)
                     and args.local_rank != -1
                     and args._no_sync_in_gradient_accumulation
                 ):
                     # Avoid unnecessary DDP synchronization since there will be no backward pass on this example.
                     with model.no_sync():
-                        tr_loss += self.training_step(model, inputs)
+                        tr_loss += self.training_step(model, inputs_t5)
                 else:
-                    tr_loss += self.training_step(model, inputs)
-                self.current_flos += float(self.floating_point_ops(inputs))
+                    tr_loss += self.training_step(model, inputs_t5)
+                self.current_flos += float(self.floating_point_ops(inputs_t5))
 
                 # Optimizer step for deepspeed must be called on every step regardless of the value of gradient_accumulation_steps
                 if self.deepspeed:
                     self.deepspeed.step()
 
-                if (step + 1) % args.gradient_accumulation_steps == 0 or (
+                if (step_t5 + 1) % args.gradient_accumulation_steps == 0 or (
                     # last step in epoch but step is always smaller than gradient_accumulation_steps
                     steps_in_epoch <= args.gradient_accumulation_steps
-                    and (step + 1) == steps_in_epoch
+                    and (step_t5 + 1) == steps_in_epoch
                 ):
                     # Gradient clipping
                     if args.max_grad_norm is not None and args.max_grad_norm > 0 and not self.deepspeed:
@@ -1373,13 +1342,16 @@ class Trainer:
 
                     model.zero_grad()
                     self.state.global_step += 1
-                    self.state.epoch = epoch + (step + 1) / steps_in_epoch
+                    self.state.epoch = epoch + (step_t5 + 1) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
 
                     self._maybe_log_save_evaluate(tr_loss, model, trial, epoch)
 
                 if self.control.should_epoch_stop or self.control.should_training_stop:
                     break
+
+                step_t5 += 1
+                step_xlnet += 1
 
             self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
             self._maybe_log_save_evaluate(tr_loss, model, trial, epoch)
