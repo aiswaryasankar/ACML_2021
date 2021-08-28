@@ -983,7 +983,6 @@ class Trainer:
 
         return model
 
-
     def train(
         self,
         resume_from_checkpoint: Optional[Union[str, bool]] = None,
@@ -1081,13 +1080,8 @@ class Trainer:
         train_dataset_is_sized = isinstance(self.train_dataset_t5, collections.abc.Sized)
 
         # Data loader and number of training steps
-        print("Getting the train dataloader")
-        print("train_dataset_xlnet still has the right keys?")
-        print(self.train_dataset_xlnet)
         train_dataloader_t5 = self.get_train_dataloader(self.train_dataset_t5)
         train_dataloader_xlnet = self.get_train_dataloader(self.train_dataset_xlnet)
-
-        print(next(iter(train_dataloader_t5)))
 
         # Setting up training control variables:
         # number of training epochs: num_train_epochs
@@ -1259,11 +1253,18 @@ class Trainer:
 
                 print("step_t5, inputs_t5")
                 print(step_t5)
-                print(inputs_t5.keys)
+                print(inputs_t5)
+                # print("DECODED INPUTS T5")
+                # print(self.tokenizer_t5.decode(inputs_t5["token"]))
+                print("DECODED INPUTS XL_NET")
+                print(self.tokenizer_xlnet.batch_decode(inputs_xlnet.input_ids))
+
+                print("DECODED INPUTS T5")
+                print(self.tokenizer_t5.batch_decode(inputs_t5.input_ids))
 
                 print("step_xlnet, inputs_xlnet")
                 print(step_xlnet)
-                print(inputs_xlnet.keys)
+                print(inputs_xlnet)
 
                 # Skip past any already trained steps if resuming training
                 if steps_trained_in_current_epoch > 0:
@@ -1287,9 +1288,9 @@ class Trainer:
                 ):
                     # Avoid unnecessary DDP synchronization since there will be no backward pass on this example.
                     with model.no_sync():
-                        tr_loss += self.training_step(model, inputs_t5)
+                        tr_loss += self.training_step(model, inputs_t5, inputs_xlnet)
                 else:
-                    tr_loss += self.training_step(model, inputs_t5)
+                    tr_loss += self.training_step(model, inputs_t5, inputs_xlnet)
                 self.current_flos += float(self.floating_point_ops(inputs_t5))
 
                 # Optimizer step for deepspeed must be called on every step regardless of the value of gradient_accumulation_steps
@@ -1747,7 +1748,7 @@ class Trainer:
 
         return inputs
 
-    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+    def training_step(self, model: nn.Module, inputs_t5: Dict[str, Union[torch.Tensor, Any]], inputs_xlnet: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         """
         Perform a training step on a batch of inputs.
 
@@ -1756,8 +1757,14 @@ class Trainer:
         Args:
             model (:obj:`nn.Module`):
                 The model to train.
-            inputs (:obj:`Dict[str, Union[torch.Tensor, Any]]`):
-                The inputs and targets of the model.
+            inputs_t5 (:obj:`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets for the summarization t5 model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument :obj:`labels`. Check your model's documentation for all accepted arguments.
+
+            inputs_xlnet (:obj:`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model for the classification model
 
                 The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
                 argument :obj:`labels`. Check your model's documentation for all accepted arguments.
@@ -1766,7 +1773,7 @@ class Trainer:
             :obj:`torch.Tensor`: The tensor with training loss on this batch.
         """
         model.train()
-        inputs = self._prepare_inputs(inputs)
+        inputs = self._prepare_inputs(inputs_t5)
 
         if is_sagemaker_mp_enabled():
             scaler = self.scaler if self.use_amp else None
@@ -1775,9 +1782,9 @@ class Trainer:
 
         if self.use_amp:
             with autocast():
-                loss = self.compute_loss(model, inputs)
+                loss = self.compute_loss(model, inputs_t5)
         else:
-            loss = self.compute_loss(model, inputs)
+            loss = self.compute_loss(model, inputs_t5)
 
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -1809,6 +1816,7 @@ class Trainer:
             labels = inputs.pop("labels")
         else:
             labels = None
+
         outputs = model(**inputs)
 
         # print("Model is ")
@@ -2222,6 +2230,8 @@ class Trainer:
             # Print out the inputs at each step so you can see if you can do a cur_len, max_len system
             print("THE INPUT INTO PREDICTION")
             print(inputs)
+            print("Decoded inputs")
+
             loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
 
             print("THE OUTPUT LOGITS")
@@ -2590,7 +2600,7 @@ class Trainer:
     # Deprecated code
     #
 
-    def prediction_loop(
+    def fprediction_loop(
         self,
         dataloader: DataLoader,
         description: str,

@@ -351,6 +351,8 @@ def main():
     # XLNetTokenizer.from_pretrained('xlnet-base-cased', do_lower_case=True)
 
     tokenizer_xlnet = XLNetTokenizer.from_pretrained('xlnet-base-cased', do_lower_case=True)
+    print("TOKENIZER XLNET IS NOT NIL")
+    print(tokenizer_xlnet)
 
     #     model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
     #     cache_dir=model_args.cache_dir,
@@ -441,7 +443,16 @@ def main():
         inputs = examples[text_column]
         targets = examples[summary_column]
         inputs = [prefix + inp for inp in inputs]
+        #model_inputs = tokenizer_xlnet.batch_encode_plus(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True).input_ids
+        # decode_outputs = tokenizer_xlnet.batch_decode(encode_outputs)
+
+        # print("encode_outputs")
+        # print(encode_outputs)
+        # print("decode_outputs")
+        # print(decode_outputs)
         model_inputs = tokenizer_xlnet(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+        # print("model direct outputs")
+        # print(tokenizer_xlnet.batch_decode(model_inputs))
 
         # Setup the tokenizer for targets
         with tokenizer_xlnet.as_target_tokenizer():
@@ -467,6 +478,7 @@ def main():
 
         print("TRAINING DATASET WITHOUT PREPROCESSING")
         print(train_dataset)
+
         train_dataset_t5 = train_dataset.map(
             preprocess_function,
             batched=True,
@@ -570,7 +582,7 @@ def main():
         train_dataset_t5=train_dataset_t5 if training_args.do_train else None,
         train_dataset_xlnet=train_dataset_xlnet if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
-        tokenizer_xlnet=tokenizer,
+        tokenizer_xlnet=tokenizer_xlnet,
         tokenizer_t5=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics if training_args.predict_with_generate else None,
